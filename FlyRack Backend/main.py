@@ -4,6 +4,7 @@ from psycopg.rows import dict_row
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel
+import time
 
 # Load variables from .env file
 load_dotenv()
@@ -25,32 +26,38 @@ def get_db_connection():
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
 def init_db():
-    with get_db_connection() as conn:
-        with conn.cursor() as cur:
-            # Create tasks table if it doesn't exist
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id SERIAL PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    done BOOLEAN NOT NULL DEFAULT FALSE
-                );
-            """)
-            
-            # Seed 3 default tasks ONLY if the table is empty
-            cur.execute("SELECT COUNT(*) FROM tasks;")
-            count = cur.fetchone()["count"]
-            if count == 0:
-                cur.execute("""
-                    INSERT INTO tasks (title, done) VALUES 
-                    (%s, %s),
-                    (%s, %s),
-                    (%s, %s);
-                """, (
-                    "Complete Backend Internship Task", True,
-                    "Connect FastAPI CRUD API to Postgres", False,
-                    "Explore database in Docker Container", False
-                ))
-            conn.commit()
+    retries = 5
+    while retries > 0:
+        try:
+            with get_db_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS tasks (
+                            id SERIAL PRIMARY KEY,
+                            title TEXT NOT NULL,
+                            done BOOLEAN NOT NULL DEFAULT FALSE
+                        );
+                    """)
+                    
+                    cur.execute("SELECT COUNT(*) FROM tasks;")
+                    count = cur.fetchone()["count"]
+                    if count == 0:
+                        cur.execute("""
+                            INSERT INTO tasks (title, done) VALUES 
+                            (%s, %s),
+                            (%s, %s),
+                            (%s, %s);
+                        """, (
+                            "Complete Backend Internship Task", True,
+                            "Connect FastAPI CRUD API to Postgres", False,
+                            "Explore database in Docker Container", False
+                        ))
+                    conn.commit()
+            break
+        except Exception as e:
+            retries -= 1
+            print(f"Database not ready yet, retrying... ({retries} attempts left)")
+            time.sleep(2)
 
 # Initialize database on startup
 @app.on_event("startup")
