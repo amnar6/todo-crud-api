@@ -1,228 +1,123 @@
-import sqlite3
-from typing import Optional
+import os
+import psycopg
+from psycopg.rows import dict_row
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel
 
-app = FastAPI(
-    title="Task Management CRUD API",
-    description="A lightweight CRUD API backed by a SQLite database.",
-    version="2.0.0",
-)
+# Load variables from .env file
+load_dotenv()
 
-DB_FILE = "tasks.db"
+DATABASE_URL = os.getenv("DATABASE_URL")
 
+app = FastAPI()
 
-def get_db_connection():
-    """Helper function to get a SQLite database connection formatted as dictionaries."""
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row  # Allows accessing columns by name
-    return conn
-
-
-def init_db():
-    """Stage 0: Initialize database, create table, and seed 3 tasks if empty."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # 1. Create table if it doesn't exist
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            done BOOLEAN NOT NULL DEFAULT 0
-        )
-    """
-    )
-
-    # 2. Check row count and seed initial 3 tasks ONLY if empty
-    cursor.execute("SELECT COUNT(*) FROM tasks")
-    count = cursor.fetchone()[0]
-
-    if count == 0:
-        cursor.executemany(
-            "INSERT INTO tasks (title, done) VALUES (?, ?)",
-            [
-                ("Complete Backend Internship Assignment 1", 1),
-                ("Connect FastAPI CRUD API to SQLite", 0),
-                ("Explore database in DB Browser for SQLite", 0),
-            ],
-        )
-        conn.commit()
-
-    conn.close()
-
-
-# Run database initialization on startup
-init_db()
-
-
-# --- Pydantic Models ---
+# Pydantic models for request validation
 class TaskCreate(BaseModel):
     title: str
 
-
 class TaskUpdate(BaseModel):
-    title: Optional[str] = None
-    done: Optional[bool] = None
+    title: str | None = None
+    done: bool | None = None
 
+def get_db_connection():
+    # dict_row returns database rows as Python dictionaries
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
-# --- Stage 1: Root & Health Endpoints ---
-@app.get("/", tags=["Metadata"])
-def get_root():
-    return {
-        "name": "Task Management API",
-        "version": "2.0.0",
-        "database": "SQLite",
-        "endpoints": ["/tasks"],
-    }
+def init_db():
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            # Create tasks table if it doesn't exist
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id SERIAL PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    done BOOLEAN NOT NULL DEFAULT FALSE
+                );
+            """)
+            
+            # Seed 3 default tasks ONLY if the table is empty
+            cur.execute("SELECT COUNT(*) FROM tasks;")
+            count = cur.fetchone()["count"]
+            if count == 0:
+                cur.execute("""
+                    INSERT INTO tasks (title, done) VALUES 
+                    (%s, %s),
+                    (%s, %s),
+                    (%s, %s);
+                """, (
+                    "Complete Backend Internship Task", True,
+                    "Connect FastAPI CRUD API to Postgres", False,
+                    "Explore database in Docker Container", False
+                ))
+            conn.commit()
 
+# Initialize database on startup
+@app.on_event("startup")
+def startup_event():
+    init_db()
 
-@app.get("/health", tags=["Metadata"])
-def get_health():
-    return {"status": "ok", "database": "connected"}
+# --- ENDPOINTS ---
 
+@app.get("/tasks")
+def get_tasks():
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, title, done FROM tasks ORDER BY id ASC;")
+            return cur.fetchall()
 
-# --- Stage 1: Read Endpoints (Database) ---
-@app.get("/tasks", tags=["Tasks"])
-def get_all_tasks():
-    """Fetch all tasks directly from the SQLite database."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
+@app.get("/tasks/{task_id}")
+def get_task(task_id: int):
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, title, done FROM tasks WHERE id = %s;", (task_id,))
+            task = cur.fetchone()
+            if not task:
+                raise HTTPException(status_code=404, detail="Task not found")
+            return task
 
-    cursor.execute("SELECT id, title, done FROM tasks")
-    rows = cursor.fetchall()
-    conn.close()
+@app.post("/tasks", status_code=status.HTTP_201_CREATED)
+def create_task(task: TaskCreate):
+    if not task.title.strip():
+        raise HTTPException(status_code=400, detail="Title cannot be empty")
+    
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO tasks (title, done) VALUES (%s, %s) RETURNING id, title, done;",
+                (task.title, False)
+            )
+            new_task = cur.fetchone()
+            conn.commit()
+            return new_task
 
-    # Convert SQLite rows into dictionaries
-    tasks = [
-        {"id": row["id"], "title": row["title"], "done": bool(row["done"])}
-        for row in rows
-    ]
-    return tasks
+@app.put("/tasks/{task_id}")
+def update_task(task_id: int, task_update: TaskUpdate):
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, title, done FROM tasks WHERE id = %s;", (task_id,))
+            existing = cur.fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="Task not found")
+            
+            new_title = task_update.title if task_update.title is not None else existing["title"]
+            new_done = task_update.done if task_update.done is not None else existing["done"]
+            
+            cur.execute(
+                "UPDATE tasks SET title = %s, done = %s WHERE id = %s RETURNING id, title, done;",
+                (new_title, new_done, task_id)
+            )
+            updated_task = cur.fetchone()
+            conn.commit()
+            return updated_task
 
-
-@app.get("/tasks/{task_id}", tags=["Tasks"])
-def get_single_task(task_id: int):
-    """Fetch a single task from SQLite by ID using parameterized queries."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # Parameterized query (?) prevents SQL injection
-    cursor.execute(
-        "SELECT id, title, done FROM tasks WHERE id = ?", (task_id,)
-    )
-    row = cursor.fetchone()
-    conn.close()
-
-    if not row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": "Task not found"},
-        )
-
-    return {"id": row["id"], "title": row["title"], "done": bool(row["done"])}
-
-# --- Stage 2: Create Endpoint (Database) ---
-@app.post(
-    "/tasks", status_code=status.HTTP_201_CREATED, tags=["Tasks"]
-)
-def create_task(task_input: TaskCreate):
-    """Stage 2: Insert a new task into SQLite and return it."""
-    # Input validation: check for empty or whitespace-only title
-    if not task_input.title or not task_input.title.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": "Title is required and cannot be empty."},
-        )
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # Parameterized INSERT query
-    cursor.execute(
-        "INSERT INTO tasks (title, done) VALUES (?, ?)",
-        (task_input.title.strip(), False),
-    )
-    conn.commit()
-
-    new_id = cursor.lastrowid  # Retrieve auto-incremented ID generated by SQLite
-    conn.close()
-
-    return {"id": new_id, "title": task_input.title.strip(), "done": False}
-
-
-# --- Stage 3: Update Endpoint (Database) ---
-@app.put("/tasks/{task_id}", tags=["Tasks"])
-def update_task(task_id: int, task_input: TaskUpdate):
-    """Stage 3: Update an existing task in SQLite."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # 1. Verify task exists
-    cursor.execute("SELECT id, title, done FROM tasks WHERE id = ?", (task_id,))
-    existing_task = cursor.fetchone()
-
-    if not existing_task:
-        conn.close()
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": "Task not found"},
-        )
-
-    # 2. Determine updated values
-    new_title = (
-        task_input.title.strip()
-        if task_input.title is not None
-        else existing_task["title"]
-    )
-    new_done = (
-        task_input.done
-        if task_input.done is not None
-        else bool(existing_task["done"])
-    )
-
-    if task_input.title is not None and not task_input.title.strip():
-        conn.close()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": "Title cannot be empty."},
-        )
-
-    # 3. Perform UPDATE query
-    cursor.execute(
-        "UPDATE tasks SET title = ?, done = ? WHERE id = ?",
-        (new_title, new_done, task_id),
-    )
-    conn.commit()
-    conn.close()
-
-    return {"id": task_id, "title": new_title, "done": new_done}
-
-
-# --- Stage 3: Delete Endpoint (Database) ---
-@app.delete(
-    "/tasks/{task_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    tags=["Tasks"],
-)
+@app.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_task(task_id: int):
-    """Stage 3: Remove a task from SQLite."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # Check existence
-    cursor.execute("SELECT id FROM tasks WHERE id = ?", (task_id,))
-    if not cursor.fetchone():
-        conn.close()
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": "Task not found"},
-        )
-
-    # Perform DELETE query
-    cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-    conn.commit()
-    conn.close()
-
-    return None
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM tasks WHERE id = %s RETURNING id;", (task_id,))
+            deleted = cur.fetchone()
+            if not deleted:
+                raise HTTPException(status_code=404, detail="Task not found")
+            conn.commit()
+            return None
