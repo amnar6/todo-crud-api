@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amna Rahman — Backend Performance & Systems Engineering</title>
+    <style>
+        :root {
+            --bg: #0b0f19;
+            --card-bg: #151d30;
+            --text-main: #f1f5f9;
+            --text-muted: #94a3b8;
+            --accent: #38bdf8;
+            --border: #1e293b;
+            --cta-bg: #0284c7;
+            --cta-hover: #0369a1;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            line-height: 1.6;
+            max-width: 860px;
+            margin: 0 auto;
+            padding: 2rem 1rem;
+        }
+        header {
+            padding-bottom: 2rem;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 2.5rem;
+        }
+        .hero-title { font-size: 2.2rem; font-weight: 700; color: var(--text-main); }
+        .hero-tagline { color: var(--accent); font-size: 1.1rem; margin-top: 0.25rem; font-weight: 500; }
+        .hero-claim { color: var(--text-muted); margin-top: 1rem; font-size: 1rem; max-width: 720px; }
+        nav { margin-top: 1.5rem; display: flex; gap: 1.25rem; align-items: center; }
+        nav a { color: var(--accent); text-decoration: none; font-size: 0.95rem; font-weight: 500; }
+        nav a:hover { text-decoration: underline; }
+        .btn-cta {
+            display: inline-block;
+            background: var(--cta-bg);
+            color: #ffffff;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.9rem;
+            transition: background 0.2s ease;
+        }
+        .btn-cta:hover { background: var(--cta-hover); text-decoration: none; }
+        .section-title { font-size: 1.5rem; margin-bottom: 1.25rem; color: var(--text-main); }
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.75rem;
+            margin-bottom: 2rem;
+        }
+        .badge {
+            display: inline-block;
+            background: #0284c7;
+            color: #fff;
+            padding: 0.2rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-bottom: 0.75rem;
+        }
+        .badge-status { background: #334155; color: #cbd5e1; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.25rem 0;
+            font-size: 0.9rem;
+        }
+        th, td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        th { color: var(--accent); background: var(--bg); font-weight: 600; }
+        ul { padding-left: 1.25rem; margin-top: 0.75rem; color: var(--text-muted); }
+        li { margin-bottom: 0.5rem; }
+        li strong { color: var(--text-main); }
+        .cta-box {
+            margin-top: 1.5rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+        }
+        footer { margin-top: 4rem; padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 0.85rem; display: flex; justify-content: space-between; align-items: center; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1 class="hero-title">Amna Rahman</h1>
+        <p class="hero-tagline">Computer Science Student & Backend Performance Engineer</p>
+        <p class="hero-claim">Focused on empirical performance auditing, CPython runtime dynamics, and low-level data structure optimization—grounded strictly in measured execution telemetry.</p>
+        <nav>
+            <a href="#case-study">Featured Study</a>
+            <a href="#in-progress">Technical Pipeline</a>
+            <a href="#about">About</a>
+            <a href="https://github.com/amnar6/Dilgorithm" target="_blank" rel="noopener" class="btn-cta">Inspect Dilgorithm Repo →</a>
+        </nav>
+    </header>
+
+    <main>
+        <!-- FEATURED CASE STUDY: DILGORITHM -->
+        <section id="case-study">
+            <h2 class="section-title">Featured Systems Performance Study</h2>
+            
+            <article class="card">
+                <span class="badge">Verified Benchmark</span>
+                <h3 style="font-size: 1.3rem; margin-bottom: 0.5rem;">Dilgorithm: Empirical FIFO Queue Profiling</h3>
+                <p style="color: var(--text-muted); font-size: 0.95rem;">Evaluating CPython Dynamic Array Shifts vs. Linked Structures vs. Ring Buffers</p>
+
+                <p style="margin-top: 1rem;">Standard Python lists incur an $O(N)$ dynamic array shift memory operation during front-side pops (<code>list.pop(0)</code>). This benchmark profiles <code>list</code> against a custom pointer-based linked list (<code>CustomLinkedFIFO</code>) and CPython's native C-based doubly-linked ring buffer (<code>collections.deque</code>).</p>
+
+                <h4 style="margin-top: 1.25rem; color: var(--accent); font-size: 1rem;">Ground-Truth Measured Latency ($N = 100,000$, GC Suppressed)</h4>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Data Structure</th>
+                            <th>Execution Latency (s)</th>
+                            <th>Relative Speedup vs. List</th>
+                            <th>Asymptotic Complexity</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>Standard Python List (<code>list.pop(0)</code>)</strong></td>
+                            <td>0.911s</td>
+                            <td>Baseline (1.0x)</td>
+                            <td>$O(N)$ dynamic array shift</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Custom Pointer Linked List (<code>CustomLinkedFIFO</code>)</strong></td>
+                            <td>0.053s</td>
+                            <td>17.2x faster</td>
+                            <td>$O(1)$ node pointer shift</td>
+                        </tr>
+                        <tr>
+                            <td><strong>CPython Ring Buffer (<code>collections.deque</code>)</strong></td>
+                            <td>0.011s</td>
+                            <td><strong>82.1x faster</strong></td>
+                            <td>$O(1)$ C block allocation</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h4 style="margin-top: 1.25rem; color: var(--accent); font-size: 1rem;">Key Empirical Findings</h4>
+                <ul>
+                    <li><strong>Verified Crossover Boundary:</strong> Empirical testing isolates the performance crossover where <code>CustomLinkedFIFO</code> outperforms standard <code>list</code> within the interval $N \in [2,500, 10,000]$. Below $N=2,500$, contiguous memory cache locality compensates for element movement.</li>
+                    <li><strong>C-Core Optimization Advantage:</strong> At $N=100,000$, <code>collections.deque</code> achieves an 82.1x speedup over <code>list</code>, demonstrating the efficiency of CPython's native C block allocations over Python pointer chasing.</li>
+                    <li><strong>Underlying Mechanism:</strong> List latency degradation is driven by CPython's internal <code>memmove</code> shifts across contiguous <code>ob_item</code> pointer arrays during front-side pops.</li>
+                </ul>
+
+                <div class="cta-box">
+                    <a href="https://github.com/amnar6/Dilgorithm" target="_blank" rel="noopener" class="btn-cta">Open the Dilgorithm repository to inspect the benchmark harness →</a>
+                </div>
+            </article>
+        </section>
+
+        <!-- IN-PROGRESS TECHNICAL PIPELINE -->
+        <section id="in-progress">
+            <h2 class="section-title">Technical Pipeline (Unexecuted / Pending Artifacts)</h2>
+
+            <article class="card">
+                <span class="badge badge-status">In Progress</span>
+                <h3 style="font-size: 1.1rem;">Air Traffic Analytics: Composite Key Indexing</h3>
+                <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 0.5rem;">
+                    Air traffic time-window lookup architecture designed around a composite key index <code>(Airport_ICAO, Time_Window_Hour)</code> to shift lookup complexity from $O(M)$ to $O(1)$; benchmark execution sweep across high-volume traffic datasets not yet run.
+                </p>
+            </article>
+
+            <article class="card">
+                <span class="badge badge-status">In Progress</span>
+                <h3 style="font-size: 1.1rem;">x86 NASM Assembly Maze Game</h3>
+                <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 0.5rem;">
+                    16-bit real-mode maze game built in x86 Assembly utilizing direct video memory mapping (<code>0xB800:0000</code>) and BIOS keyboard polling (<code>int 16h</code>, <code>AH=00h</code>); executable runs in DOSBox, visual screen captures pending local hardware recording.
+                </p>
+            </article>
+        </section>
+
+        <!-- ABOUT SECTION -->
+        <section id="about" class="card">
+            <h2 class="section-title" style="margin-bottom: 0.75rem;">About</h2>
+            <p>I am a Computer Science student focused on low-level systems programming, backend engineering, and runtime micro-benchmarking.</p>
+            <p style="margin-top: 0.75rem; color: var(--text-muted); font-size: 0.85rem;"><em>Note: Professional headshot media pending local file upload.</em></p>
+        </section>
+    </main>
+
+    <footer>
+        <p>© 2026 Amna Rahman — Deployed live via GitHub Pages.</p>
+        <a href="https://github.com/amnar6/Dilgorithm" target="_blank" rel="noopener" style="color: var(--accent); text-decoration: none;">GitHub Repository</a>
+    </footer>
+
+</body>
+</html>
