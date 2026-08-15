@@ -3,7 +3,3 @@ __pycache__/
 *.pyc
 .venv/
 venv/
-.vscode/
-*.db
-FlyRack Backend/
-logs/
