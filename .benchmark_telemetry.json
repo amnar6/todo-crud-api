@@ -6,5 +6,13 @@
     "list_pop_0_s": 8.7956,
     "linked_list_s": 0.0081,
     "deque_s": 0.0018
+  },
+  {
+    "timestamp": "2026-08-16T00:52:26.442638Z",
+    "N": 100000,
+    "gc_disabled": true,
+    "list_pop_0_s": 8.3182,
+    "linked_list_s": 0.0077,
+    "deque_s": 0.0017
   }
 ]
