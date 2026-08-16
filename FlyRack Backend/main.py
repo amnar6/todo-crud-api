@@ -1,4 +1,6 @@
 import os
+import json
+import re
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -6,13 +8,14 @@ from pydantic import BaseModel, Field
 from enum import Enum
 from supabase import create_client, Client
 from typing import Optional
+from openai import OpenAI
 
 # Load environment variables
 load_dotenv(override=True)
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"), override=True)
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"), override=True)
 
-# --- GRACEFUL SUPABASE INIT ---
+# --- SUPABASE INIT ---
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://placeholder.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "placeholder-key")
 
@@ -21,7 +24,34 @@ try:
 except Exception:
     supabase = None
 
-app = FastAPI(title="Auth Login & Protect API")
+# --- OPENROUTER / LLM CLIENT INIT ---
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL", "openrouter/free")
+
+llm_client = OpenAI(
+    base_url=LLM_BASE_URL,
+    api_key=LLM_API_KEY,
+)
+
+TRIAGE_SYSTEM_PROMPT = """You are an automated task classification system.
+Analyze the user's task description and return a strictly valid JSON object matching this schema:
+{
+  "category": "work" | "personal" | "finance" | "health" | "urgent" | "other",
+  "priority": "low" | "normal" | "high",
+  "estimated_minutes": integer between 1 and 480,
+  "confidence": float between 0.0 and 1.0,
+  "reason": "one concise sentence explaining the classification"
+}
+
+Strict Rules:
+- You must output ONLY raw JSON. No markdown backticks (```json), no explanations, no conversational text before or after.
+- The "category" MUST be one of: ["work", "personal", "finance", "health", "urgent", "other"].
+- The "priority" MUST be one of: ["low", "normal", "high"].
+- If ambiguous, unclear, or insufficient detail: set category to "other", confidence < 0.5, and priority to "normal".
+"""
+
+app = FastAPI(title="Auth Login & Task Triage API")
 security = HTTPBearer()
 
 # --- REQUEST SCHEMAS ---
@@ -39,7 +69,7 @@ class TaskUpdate(BaseModel):
     description: Optional[str] = None
     completed: Optional[bool] = None
 
-# --- AI TRIAGE SCHEMAS (STAGE 1) ---
+# --- AI TRIAGE SCHEMAS ---
 
 class TaskCategory(str, Enum):
     WORK = "work"
@@ -84,9 +114,8 @@ def public_info():
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     try:
-        # Verify the JWT token with Supabase Auth
         if supabase is None:
-             raise Exception("Supabase client not initialized")
+            raise Exception("Supabase client not initialized")
         user_response = supabase.auth.get_user(token)
         if not user_response.user:
             raise HTTPException(
@@ -100,7 +129,7 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
             detail="Could not validate credentials"
         )
 
-# --- STAGE 1: SIGNUP & LOGIN ---
+# --- AUTH ROUTES ---
 
 @app.post("/auth/signup", status_code=status.HTTP_201_CREATED)
 def signup(credentials: AuthCredentials):
@@ -109,19 +138,16 @@ def signup(credentials: AuthCredentials):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email and password are required"
         )
-    
     try:
         response = supabase.auth.sign_up({
             "email": credentials.email,
             "password": credentials.password
         })
-        
         if response.user is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Signup failed. Please check credentials."
             )
-            
         return {
             "message": "User created successfully",
             "user": {
@@ -131,10 +157,7 @@ def signup(credentials: AuthCredentials):
             }
         }
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 @app.post("/auth/login", status_code=status.HTTP_200_OK)
 def login(credentials: AuthCredentials):
@@ -143,19 +166,16 @@ def login(credentials: AuthCredentials):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email and password are required"
         )
-    
     try:
         response = supabase.auth.sign_in_with_password({
             "email": credentials.email,
             "password": credentials.password
         })
-        
         if not response.session:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid login credentials"
             )
-            
         return {
             "access_token": response.session.access_token,
             "refresh_token": response.session.refresh_token,
@@ -171,7 +191,7 @@ def login(credentials: AuthCredentials):
             detail="Invalid login credentials"
         )
 
-# --- STAGE 2: PROTECTED PROFILE ---
+# --- PROTECTED PROFILE ---
 
 @app.get("/protected/profile")
 def get_profile(current_user=Depends(get_current_user)):
@@ -181,9 +201,8 @@ def get_profile(current_user=Depends(get_current_user)):
         "email": current_user.email
     }
 
-# --- STAGE 3: USER-SPECIFIC TASK CRUD ---
+# --- TASK CRUD ---
 
-# 1. CREATE TASK
 @app.post("/tasks", status_code=status.HTTP_201_CREATED)
 def create_task(task: TaskCreate, current_user=Depends(get_current_user)):
     try:
@@ -192,39 +211,26 @@ def create_task(task: TaskCreate, current_user=Depends(get_current_user)):
             "description": task.description,
             "user_id": current_user.id
         }).execute()
-        
         return {"message": "Task created successfully", "task": response.data[0]}
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-# 2. READ ALL TASKS FOR CURRENT USER
 @app.get("/tasks")
 def get_user_tasks(current_user=Depends(get_current_user)):
     try:
-        response = supabase.table("tasks") \
-            .select("*") \
-            .eq("user_id", current_user.id) \
-            .execute()
-            
+        response = supabase.table("tasks").select("*").eq("user_id", current_user.id).execute()
         return {"tasks": response.data}
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-# 3. UPDATE TASK
 @app.patch("/tasks/{task_id}")
 def update_task(task_id: int, task: TaskUpdate, current_user=Depends(get_current_user)):
     try:
         update_data = {k: v for k, v in task.model_dump().items() if v is not None}
-        
         if not update_data:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided to update")
 
-        response = supabase.table("tasks") \
-            .update(update_data) \
-            .eq("id", task_id) \
-            .eq("user_id", current_user.id) \
-            .execute()
-
+        response = supabase.table("tasks").update(update_data).eq("id", task_id).eq("user_id", current_user.id).execute()
         if not response.data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found or unauthorized")
 
@@ -232,16 +238,10 @@ def update_task(task_id: int, task: TaskUpdate, current_user=Depends(get_current
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-# 4. DELETE TASK
 @app.delete("/tasks/{task_id}")
 def delete_task(task_id: int, current_user=Depends(get_current_user)):
     try:
-        response = supabase.table("tasks") \
-            .delete() \
-            .eq("id", task_id) \
-            .eq("user_id", current_user.id) \
-            .execute()
-
+        response = supabase.table("tasks").delete().eq("id", task_id).eq("user_id", current_user.id).execute()
         if not response.data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found or unauthorized")
 
@@ -249,11 +249,11 @@ def delete_task(task_id: int, current_user=Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-# --- AI ENDPOINT: TASK TRIAGE (STAGE 1 WITH STUB MODE) ---
+# --- AI ENDPOINT: TASK TRIAGE (STAGE 2 - REAL MODEL WITH ROBUST PARSING) ---
 
 @app.post("/tasks/triage", response_model=TaskTriageResponse, status_code=status.HTTP_200_OK)
 def triage_task(request: TaskTriageRequest):
-    # Stub mode: skips model call when LLM_STUB=1
+    # Stub mode check
     if os.getenv("LLM_STUB", "0") == "1":
         return TaskTriageResponse(
             category=TaskCategory.WORK,
@@ -263,8 +263,38 @@ def triage_task(request: TaskTriageRequest):
             reason="Stub mode: Pre-computed response satisfying output schema."
         )
 
-    # Real LLM integration placeholder (Stages 2 & 3)
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Model call will be connected in Stage 2."
-    )
+    try:
+        completion = llm_client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": TRIAGE_SYSTEM_PROMPT},
+                {"role": "user", "content": request.description}
+            ],
+            temperature=0.1
+        )
+        raw_content = completion.choices[0].message.content.strip()
+
+        # Robust JSON extraction: match the first '{' to the last '}'
+        match = re.search(r"\{.*\}", raw_content, re.DOTALL)
+        if match:
+            json_str = match.group(0)
+        else:
+            json_str = raw_content
+
+        data = json.loads(json_str)
+        return TaskTriageResponse(**data)
+
+    except json.JSONDecodeError:
+        # Fallback if model output fails JSON parsing
+        return TaskTriageResponse(
+            category=TaskCategory.OTHER,
+            priority=TaskPriority.NORMAL,
+            estimated_minutes=30,
+            confidence=0.3,
+            reason=f"Model output format fallback. Raw: {raw_content[:60]}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"LLM Provider Error: {str(e)}"
+        )
