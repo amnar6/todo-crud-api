@@ -1,19 +1,32 @@
-# Task Management CRUD API (SQLite Persistence)
+# 10x Task Management & AI Triage API
 
-A lightweight RESTful API built with Python and FastAPI that manages a to do list backed by a SQLite database (`tasks.db`). Features interactive OpenAPI (Swagger UI) documentation, input validation, and full data persistence across server restarts.
+A comprehensive, scalable backend system built with Python and FastAPI. The project features full CRUD task management with flexible persistence options (local SQLite and cloud Supabase PostgreSQL), robust JWT authentication, and an asynchronous AI task-triage pipeline powered by OpenRouter and background worker queues.
 
+---
 
-## Why SQLite?
+## Architecture & Database Options
 
-SQLite was chosen as the database layer because:
-* **Zero Configuration:** It runs serverless directly from a single local file (`tasks.db`).
-* **Persistence:** Data survives server restarts without needing external database service setups.
-* **Auto-Initialization:** The application automatically creates the database file, builds the table schema, and seeds default data on its first run[cite: 2].
+The project supports two persistence layers:
+1. **Local SQLite (`tasks.db`)**: Lightweight, zero config, serverless persistence ideal for rapid local development, offline runs, and isolated unit testing.
+2. **Cloud PostgreSQL (Supabase)**: Production grade cloud persistence with built in relational integrity, remote access, and integrated user identity management.
 
+---
+
+## 5 Concepts Implemented
+
+| # | Concept | Implementation Location | Description |
+|---|---|---|---|
+| 1 | **API Endpoints** | `FlyRack Backend/main.py` | FastAPI REST endpoints (`/tasks`, `/auth/*`, `/tasks/triage/*`) with Pydantic schema validation. |
+| 2 | **Database** | Supabase PostgreSQL / Local SQLite | Persistent task storage that survives server restarts. |
+| 3 | **Authentication** | `FlyRack Backend/main.py` | JWT token validation and protected routes via `get_current_user` dependency. |
+| 4 | **LLM Integration** | `FlyRack Backend/main.py` | OpenRouter client executing structured prompt classification with JSON parsing. |
+| 5 | **Background Jobs** | `FlyRack Backend/main.py` | FastAPI `BackgroundTasks` returning an immediate `202 Accepted` with polling status endpoints (`/tasks/triage/jobs/{job_id}`). |
+
+---
 
 ## How to Run
 
-1. **Clone the repository:**
-   ```bash
-   git clone [https://github.com/amnar6/todo-crud-api.git](https://github.com/amnar6/todo-crud-api.git)
-   cd todo-crud-api
+### 1. Clone the Repository
+```bash
+git clone [https://github.com/amnar6/todo-crud-api.git](https://github.com/amnar6/todo-crud-api.git)
+cd todo-crud-api

@@ -1,13 +1,16 @@
 import os
 import json
 import re
+import uuid
+import time
+from datetime import datetime
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi import FastAPI, HTTPException, status, Depends, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from enum import Enum
 from supabase import create_client, Client
-from typing import Optional
+from typing import Optional, Dict, Any
 from openai import OpenAI
 
 # Load environment variables
@@ -98,6 +101,26 @@ class TaskTriageResponse(BaseModel):
     estimated_minutes: int = Field(..., ge=1, le=480)
     confidence: float = Field(..., ge=0.0, le=1.0)
     reason: str = Field(..., max_length=200)
+
+# --- JOB QUEUE SCHEMAS ---
+
+class JobStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class JobResponse(BaseModel):
+    job_id: str
+    status: JobStatus
+    created_at: str
+    completed_at: Optional[str] = None
+    result: Optional[TaskTriageResponse] = None
+    error: Optional[str] = None
+    retries: int = 0
+
+# In-memory store for tracking background jobs
+jobs_db: Dict[str, Dict[str, Any]] = {}
 
 # --- EVENTS & PUBLIC ENDPOINTS ---
 
@@ -249,52 +272,88 @@ def delete_task(task_id: int, current_user=Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-# --- AI ENDPOINT: TASK TRIAGE (STAGE 2 - REAL MODEL WITH ROBUST PARSING) ---
+# --- BACKGROUND WORKER FUNCTION ---
 
-@app.post("/tasks/triage", response_model=TaskTriageResponse, status_code=status.HTTP_200_OK)
-def triage_task(request: TaskTriageRequest):
+def process_triage_job(job_id: str, description: str, max_retries: int = 3):
+    """Background worker executing the LLM inference with retry/backoff."""
+    job = jobs_db.get(job_id)
+    if not job:
+        return
+
+    job["status"] = JobStatus.PROCESSING
+
     # Stub mode check
     if os.getenv("LLM_STUB", "0") == "1":
-        return TaskTriageResponse(
+        job["status"] = JobStatus.COMPLETED
+        job["result"] = TaskTriageResponse(
             category=TaskCategory.WORK,
             priority=TaskPriority.NORMAL,
             estimated_minutes=30,
             confidence=0.95,
             reason="Stub mode: Pre-computed response satisfying output schema."
         )
+        job["completed_at"] = datetime.utcnow().isoformat()
+        return
 
-    try:
-        completion = llm_client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[
-                {"role": "system", "content": TRIAGE_SYSTEM_PROMPT},
-                {"role": "user", "content": request.description}
-            ],
-            temperature=0.1
-        )
-        raw_content = completion.choices[0].message.content.strip()
+    for attempt in range(max_retries):
+        try:
+            job["retries"] = attempt
+            completion = llm_client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=[
+                    {"role": "system", "content": TRIAGE_SYSTEM_PROMPT},
+                    {"role": "user", "content": description}
+                ],
+                temperature=0.1
+            )
+            raw_content = completion.choices[0].message.content.strip()
 
-        # Robust JSON extraction: match the first '{' to the last '}'
-        match = re.search(r"\{.*\}", raw_content, re.DOTALL)
-        if match:
-            json_str = match.group(0)
-        else:
-            json_str = raw_content
+            # Robust JSON extraction: match the first '{' to the last '}'
+            match = re.search(r"\{.*\}", raw_content, re.DOTALL)
+            json_str = match.group(0) if match else raw_content
+            data = json.loads(json_str)
 
-        data = json.loads(json_str)
-        return TaskTriageResponse(**data)
+            job["status"] = JobStatus.COMPLETED
+            job["result"] = TaskTriageResponse(**data)
+            job["completed_at"] = datetime.utcnow().isoformat()
+            return
 
-    except json.JSONDecodeError:
-        # Fallback if model output fails JSON parsing
-        return TaskTriageResponse(
-            category=TaskCategory.OTHER,
-            priority=TaskPriority.NORMAL,
-            estimated_minutes=30,
-            confidence=0.3,
-            reason=f"Model output format fallback. Raw: {raw_content[:60]}"
-        )
-    except Exception as e:
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+            else:
+                job["status"] = JobStatus.FAILED
+                job["error"] = f"Failed after {max_retries} attempts: {str(e)}"
+                job["completed_at"] = datetime.utcnow().isoformat()
+                print(f"[ALERT] Background job {job_id} failed: {str(e)}")
+
+# --- ASYNC AI TRIAGE ENDPOINTS (CONCEPT 5: BACKGROUND JOBS) ---
+
+@app.post("/tasks/triage/async", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
+def triage_task_async(request: TaskTriageRequest, background_tasks: BackgroundTasks):
+    """Producer: Enqueue a task triage job and return 202 Accepted immediately."""
+    job_id = str(uuid.uuid4())
+    job_record = {
+        "job_id": job_id,
+        "status": JobStatus.PENDING,
+        "created_at": datetime.utcnow().isoformat(),
+        "completed_at": None,
+        "result": None,
+        "error": None,
+        "retries": 0
+    }
+    jobs_db[job_id] = job_record
+
+    background_tasks.add_task(process_triage_job, job_id, request.description)
+    return job_record
+
+@app.get("/tasks/triage/jobs/{job_id}", response_model=JobResponse, status_code=status.HTTP_200_OK)
+def get_triage_job_status(job_id: str):
+    """Consumer/Poller: Check the status and results of a background triage job."""
+    job = jobs_db.get(job_id)
+    if not job:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"LLM Provider Error: {str(e)}"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found"
         )
+    return job
